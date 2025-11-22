@@ -1,9 +1,9 @@
-L'Agent Coach de Triathlon Autonome
+# L'Agent Coach de Triathlon Autonome
 
 Projet IA Générative : Agents Intelligents, Raisonnement Avancé & Streamlit
 
 
-1. Objectif du Projet : Résoudre un Problème Complexe
+## 1. Objectif du Projet : Résoudre un Problème Complexe
 
 L'objectif du projet IronMind est de concevoir un système intelligent capable de générer des plans d'entraînement Ironman (distance ultra-longue : 3.8km natation, 180km vélo, 42.2km course) hautement personnalisés, fiables et sécurisés.
 
@@ -11,7 +11,7 @@ La préparation Ironman est un problème complexe car elle nécessite l'équilib
 
 Interface : L'application est développée avec Streamlit pour une interaction utilisateur fluide.
 
-2. Architecture des Agents et Raisonnement Avancé
+## 2. Architecture des Agents et Raisonnement Avancé
 
 Notre application implémente une architecture Multi-Agents avec une technique de Self-Correction (Réflexion), garantissant que chaque plan généré est immédiatement soumis à une vérification de sécurité avant d'être présenté à l'utilisateur.
 
@@ -45,7 +45,7 @@ Corpus de Connaissances : L'application est enrichie par l'indexation de [Nombre
 
 Implémentation : Nous utilisons LangChain et ChromaDB pour stocker les vecteurs des documents, permettant une récupération sémantique rapide des règles physiologiques.
 
-3. Installation et Lancement
+## 3. Installation et Lancement
 
 Ce projet nécessite Python 3.12 (recommandé pour la stabilité des dépendances) et une clé API OpenAI.
 
@@ -83,7 +83,7 @@ D. Lancement de l'Application Streamlit
 streamlit run app.py
 
 
-4. Livrables et Fichiers Clés
+## 4. Livrables et Fichiers Clés
 
 app.py: L'application Streamlit principale, contenant la logique des Agents et la boucle de Self-Correction.
 
