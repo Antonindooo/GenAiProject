@@ -55,8 +55,13 @@ Clonez ce dépôt
 
 Créez et activez un environnement virtuel :
 
+Mac:
 python3.12 -m venv venv
 source venv/bin/activate
+
+Windows:
+python -m venv venv
+venv\Scripts\activate.bat
 
 
 B. Configuration des Dépendances et de l'API
