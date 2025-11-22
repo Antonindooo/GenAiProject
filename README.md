@@ -74,7 +74,7 @@ OPENAI_API_KEY="votre_clé_api_openai_ici"
 C. Construction de la Base de Données RAG
 
 Vous devez d'abord construire l'index vectoriel. Assurez-vous que les fichiers PDF de la knowledge_base/ sont présents.
-
+Vous devez également créer un dossier chroma_data afin d'enregistrer les documents vectorisés.
 python rag_builder.py
 
 
@@ -89,7 +89,7 @@ app.py: L'application Streamlit principale, contenant la logique des Agents et l
 
 rag_builder.py: Script utilisé pour charger les PDF, les chunker et construire l'index ChromaDB.
 
-knowledge_base/: Dossier contenant le corpus de documents experts (non poussé sur Git).
+knowledge_base/: Dossier contenant le corpus de documents experts
 
 requirements.txt: Liste des dépendances.
 
