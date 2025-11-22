@@ -2,7 +2,7 @@ import streamlit as st
 import json
 import os
 from dotenv import load_dotenv
-
+import time
 # --- IMPORTS LANGCHAIN / AGENTS ---
 from langchain.agents import AgentExecutor, create_openai_functions_agent
 from langchain.tools import Tool
@@ -90,14 +90,38 @@ def create_coach_agent_executor(retriever_tool, user_params):
 
 
 def critique_plan(plan_brouillon, retriever_tool):
-    """ Agent 2 : Physiologiste, implémente la Self-Correction avec RAG. """
+    """ Agent 2 : Physiologiste, implémente la Self-Correction avec RAG et un mécanisme de Retry."""
 
-    # RAG pour ancrer la critique
-    # On invoque le RAG pour obtenir un contexte de sécurité précis
-    rules = retriever_tool.invoke("Règles de progression, enchaînement vélo-course, et charge maximale par semaine.")
+    max_retries = 3
+    rules = []
 
-    # On ne prend qu'un extrait du RAG pour éviter de dépasser la limite de prompt
-    rules_snippet = rules[0].page_content[:600] + '...'
+    # --- MÉCANISME DE RETRY POUR L'APPEL RAG ---
+    for attempt in range(max_retries):
+        try:
+            # RAG pour ancrer la critique
+            rules = retriever_tool.invoke(
+                "Règles de progression, enchaînement vélo-course, et charge maximale par semaine.")
+            if rules:
+                # Succès : sortir de la boucle de retry
+                break
+        except Exception as e:
+            # Log de l'échec
+            print(f"Échec de l'appel RAG (tentative {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                # Temporisation exponentielle: 2s, 4s, ...
+                sleep_time = 2 ** (attempt + 1)
+                time.sleep(sleep_time)
+            else:
+                # Dernier échec
+                print("Le RAG a échoué après toutes les tentatives.")
+
+    # --- Gestion des résultats RAG (FallBack) ---
+    if rules:
+        # Si des documents sont trouvés, utiliser l'extrait du premier document
+        rules_snippet = rules[0].page_content[:600] + '...'
+    else:
+        # Fallback si le RAG ne trouve rien après tous les retries
+        rules_snippet = "ERREUR RAG CRITIQUE: Échec de la récupération après 3 tentatives. Baser la critique sur les règles universelles (règle des 10%, nécessité de repos)."
 
     critique_prompt = f"""
     En tant qu'Agent Physiologiste expert en prévention des blessures, critique le plan d'entraînement Ironman suivant.
@@ -127,7 +151,6 @@ def critique_plan(plan_brouillon, retriever_tool):
 
     response = llm_critique.invoke(critique_prompt, response_format={"type": "json_object"})
     return response.content
-
 
 # --- 3. LOGIQUE STREAMLIT ---
 
