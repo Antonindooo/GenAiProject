@@ -5,7 +5,7 @@ import time
 import shutil
 import re
 from dotenv import load_dotenv
-from fpdf import FPDF  # Pour la génération de PDF
+from fpdf import FPDF
 
 # --- CHARGEMENT DES VARIABLES D'ENVIRONNEMENT (CLÉ API) ---
 load_dotenv()
@@ -24,7 +24,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 CHROMA_DB_PATH = "chroma_data"
 KNOWLEDGE_BASE_DIR = "knowledge_base"
 
-# Liste des fichiers PDF
+# Liste des fichiers PDF (Assure-toi qu'ils sont bien dans le dossier knowledge_base)
 PDF_FILES = [
     "Ironman.pdf",
     "50-conseills-pour-reussir-vos-debuts-en-triathlon.pdf",
@@ -35,18 +35,18 @@ PDF_FILES = [
 ]
 
 
-# --- 1. UTILITAIRES (PDF & RAG) ---
+# --- 1. UTILITAIRES (PDF STYLISÉ & RAG) ---
 
 def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
     """
-    Génère un PDF stylisé en interprétant le Markdown basique (Titres, Listes).
+    Génère un PDF stylisé (Couleurs, Mise en forme) à partir du plan Markdown.
     """
 
     class PDF(FPDF):
         def header(self):
             # Titre Principal Rouge
             self.set_font('Arial', 'B', 20)
-            self.set_text_color(201, 43, 43)  # Rouge #C92B2B
+            self.set_text_color(201, 43, 43)  # Rouge IronMind
             self.cell(0, 10, "IRONMIND - Plan d'Entrainement", 0, 1, 'C')
             self.ln(5)
 
@@ -66,8 +66,7 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
 
-    # Nettoyage des caractères non supportés par FPDF standard (latin-1)
-    # On remplace les emojis courants par rien ou des symboles simples
+    # Dictionnaire pour remplacer les emojis (FPDF ne gère pas les emojis)
     replacements = {
         "🏊": "Natation: ", "🚴": "Velo: ", "🏃": "Course: ", "🏋️": "Renfo: ",
         "✅": "[OK]", "❌": "[NO]", "->": ">", "—": "-"
@@ -78,15 +77,15 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
     for line in lines:
         line = line.strip()
 
-        # Application des remplacements d'emojis
+        # Remplacement des emojis
         for key, val in replacements.items():
             line = line.replace(key, val)
 
-        # Encodage sécurisé pour éviter les crashs (latin-1)
+        # Encodage sécurisé latin-1
         try:
             safe_line = line.encode('latin-1', 'replace').decode('latin-1')
         except:
-            continue  # Saute la ligne si illisible
+            continue
 
         if not safe_line:
             pdf.ln(3)  # Petit espace pour les lignes vides
@@ -94,7 +93,7 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
 
         # --- DÉTECTION DU STYLE MARKDOWN ---
 
-        # TITRE 1 (ex: # Lundi) -> Rouge + Gros
+        # TITRE 1 (Jours) -> Rouge + Gros
         if safe_line.startswith('# '):
             pdf.ln(5)
             pdf.set_font("Arial", 'B', 16)
@@ -102,14 +101,14 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
             content = safe_line.replace('#', '').strip()
             pdf.cell(0, 10, content, 0, 1)
 
-            # Petite ligne sous le jour
+            # Petite ligne grise sous le jour
             x = pdf.get_x()
             y = pdf.get_y()
             pdf.set_draw_color(220, 220, 220)
             pdf.line(x, y, x + 190, y)
             pdf.ln(2)
 
-        # TITRE 2 (ex: ## Matin) -> Bleu Foncé
+        # TITRE 2 (Sections matin/soir) -> Bleu Foncé
         elif safe_line.startswith('## '):
             pdf.ln(2)
             pdf.set_font("Arial", 'B', 13)
@@ -117,18 +116,16 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
             content = safe_line.replace('#', '').strip()
             pdf.cell(0, 8, content, 0, 1)
 
-        # LISTE A PUCES (ex: - 10min échauffement)
+        # LISTE A PUCES
         elif safe_line.startswith('- '):
             pdf.set_font("Arial", '', 11)
             pdf.set_text_color(50, 50, 50)  # Gris foncé
             content = safe_line[2:]  # Enlève le tiret
 
-            # Astuce pour simuler une puce propre
-            current_y = pdf.get_y()
-            pdf.set_x(15)  # Indentation
-            pdf.cell(5, 5, chr(149), 0, 0)  # Puce ronde (bullet)
-            pdf.set_x(20)
-            pdf.multi_cell(0, 5, content.replace('**', ''))  # On enlève les ** du gras Markdown
+            # Puce personnalisée
+            pdf.set_x(15)
+            pdf.cell(5, 5, chr(149), 0, 0)  # Puce ronde
+            pdf.multi_cell(0, 5, content.replace('**', ''))  # Enlève le gras markdown
 
         # TEXTE NORMAL
         else:
@@ -137,6 +134,7 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
             pdf.multi_cell(0, 5, safe_line.replace('**', ''))
 
     return pdf.output(dest='S').encode('latin-1')
+
 
 def create_vector_store():
     """Charge et vectorise les documents."""
@@ -240,22 +238,19 @@ def finalize_plan_with_agent2(draft_plan, retriever_tool, user_params, feedbacks
       - Utilise des **Titres** pour les jours (ex: `### Lundi`).
       - Mets les points clés en **Gras**.
       - Fais une liste claire et aérée (tirets).
+      - Ne mets PAS de balises ```markdown. Donne juste le texte brut.
 
     Génère directement le plan d'entraînement final (Format Markdown propre et esthétique).
-    IMPORTANT : Ne mets PAS de balises ```markdown au début ou à la fin. Donne juste le texte brut.
     """
 
-    # Appel direct au modèle (pas besoin d'agent complexe ici, c'est du raffinement textuel)
     messages = [
         SystemMessage(content="Tu es un expert en planification de triathlon. Tu finalises les plans."),
         HumanMessage(content=refine_prompt)
     ]
     response = llm_critique.invoke(messages)
 
-    # --- CORRECTION 1 : NETTOYAGE DU TEXTE ---
-    # On retire les balises de code Markdown si l'IA en a mis
+    # Nettoyage des balises Markdown parasites pour l'affichage
     clean_content = response.content.replace("```markdown", "").replace("```", "").strip()
-
     return clean_content
 
 
@@ -451,11 +446,6 @@ st.markdown("""
         box-shadow: 0 8px 20px rgba(201, 43, 43, 0.5);
     }
 
-    /* SIDEBAR */
-    .css-1d391kg {
-        background-color: #f7f9fc;
-    }
-
     /* ZONE DE TEXTE */
     .stTextArea>div>div>textarea {
         border-radius: 12px;
@@ -506,14 +496,25 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2413/2413074.png", width=80)
     st.header("Profil Athlète")
     st.markdown("---")
+
+    # Paramètres de base
     user_level = st.selectbox("🏅 Niveau", ["Débutant", "Intermédiaire", "Avancé"])
     weekly_hours = st.slider("⏱️ Volume (Heures/semaine)", 5, 25, 12)
     goal_race = st.text_input("🎯 Objectif Principal", "Ironman Nice")
 
+    # NOUVEAU PARAMETRE : TEMPS
+    weeks_until_race = st.number_input("⏳ Semaines avant la course", min_value=1, max_value=52, value=12)
+
     st.markdown("---")
     st.info("💡 **Conseil :** Ajustez ces paramètres avant de générer votre premier plan.")
 
-user_params = {"Niveau": user_level, "Heures": weekly_hours, "Objectif": goal_race}
+# Intégration du temps restant dans les paramètres envoyés à l'IA
+user_params = {
+    "Niveau": user_level,
+    "Heures": weekly_hours,
+    "Objectif": goal_race,
+    "Semaines_Restantes": weeks_until_race
+}
 
 # --- LOGIQUE PRINCIPALE ---
 
@@ -551,7 +552,6 @@ if st.session_state.current_plan:
     st.markdown('<div class="sub-header">📅 VOTRE SEMAINE TYPE</div>', unsafe_allow_html=True)
 
     # CONVERSION MARKDOWN -> HTML pour affichage dans la carte
-    # Cela permet d'avoir le contenu DANS le div blanc avec le bon style
     html_plan = simple_markdown_to_html(st.session_state.current_plan)
 
     st.markdown(f"""
@@ -568,11 +568,10 @@ if st.session_state.current_plan:
     with col1:
         st.write("**Une contrainte ? Une blessure ? Dites-le au coach :**")
 
-        # --- CORRECTION 2 : UTILISATION D'UN FORMULAIRE (st.form) ---
-        # Cela permet de valider le feedback en UN SEUL CLIC
+        # --- UTILISATION D'UN FORMULAIRE (POUR VALIDATION EN 1 CLIC) ---
         with st.form(key="feedback_form"):
             user_feedback = st.text_area(
-                "feedback_input",
+                "input_feedback",
                 height=100,
                 label_visibility="collapsed",
                 placeholder="Ex: 'Pas de vélo le mercredi', 'Je veux plus de volume en natation'..."
@@ -608,6 +607,7 @@ if st.session_state.current_plan:
     with col2:
         st.write("**Satisfait ?**")
         if st.session_state.current_plan:
+            # Génération du PDF avec la NOUVELLE fonction stylisée
             pdf_bytes = create_pdf(st.session_state.current_plan)
             st.download_button(
                 label="📥 TÉLÉCHARGER PDF",
