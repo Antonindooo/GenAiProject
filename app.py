@@ -3,11 +3,11 @@ import json
 import os
 import time
 import shutil
+import re
 from dotenv import load_dotenv
 from fpdf import FPDF  # Pour la génération de PDF
 
 # --- CHARGEMENT DES VARIABLES D'ENVIRONNEMENT (CLÉ API) ---
-# C'est ici que le changement est nécessaire : charger l'environnement AVANT tout le reste
 load_dotenv()
 
 # --- IMPORTS LANGCHAIN / AGENTS ---
@@ -24,7 +24,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 CHROMA_DB_PATH = "chroma_data"
 KNOWLEDGE_BASE_DIR = "knowledge_base"
 
-# Liste des fichiers PDF pour la reconstruction
+# Liste des fichiers PDF
 PDF_FILES = [
     "Ironman.pdf",
     "50-conseills-pour-reussir-vos-debuts-en-triathlon.pdf",
@@ -38,31 +38,105 @@ PDF_FILES = [
 # --- 1. UTILITAIRES (PDF & RAG) ---
 
 def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
-    """Génère un PDF basique à partir du texte du plan."""
+    """
+    Génère un PDF stylisé en interprétant le Markdown basique (Titres, Listes).
+    """
 
     class PDF(FPDF):
         def header(self):
-            self.set_font('Arial', 'B', 15)
-            self.cell(0, 10, 'IronMind - Plan d\'Entrainement', 0, 1, 'C')
+            # Titre Principal Rouge
+            self.set_font('Arial', 'B', 20)
+            self.set_text_color(201, 43, 43)  # Rouge #C92B2B
+            self.cell(0, 10, "IRONMIND - Plan d'Entrainement", 0, 1, 'C')
+            self.ln(5)
+
+            # Ligne de séparation
+            self.set_draw_color(201, 43, 43)
+            self.set_line_width(0.5)
+            self.line(10, 25, 200, 25)
             self.ln(10)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('Arial', 'I', 8)
+            self.set_text_color(128, 128, 128)
+            self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
     pdf = PDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
+    pdf.set_auto_page_break(auto=True, margin=15)
 
-    # Nettoyage basique pour FPDF (qui ne gère pas bien tous les caractères unicode par défaut)
-    # On remplace les caractères Markdown gras/titres pour la lisibilité
-    clean_text = text.replace('**', '').replace('#', '').replace('__', '')
+    # Nettoyage des caractères non supportés par FPDF standard (latin-1)
+    # On remplace les emojis courants par rien ou des symboles simples
+    replacements = {
+        "🏊": "Natation: ", "🚴": "Velo: ", "🏃": "Course: ", "🏋️": "Renfo: ",
+        "✅": "[OK]", "❌": "[NO]", "->": ">", "—": "-"
+    }
 
-    # Gestion de l'encodage pour éviter les erreurs latin-1
-    # On écrit ligne par ligne
-    for line in clean_text.split('\n'):
-        # Encodage/décodage pour gérer les accents au mieux avec la police de base
-        encoded_line = line.encode('latin-1', 'replace').decode('latin-1')
-        pdf.multi_cell(0, 10, encoded_line)
+    lines = text.split('\n')
+
+    for line in lines:
+        line = line.strip()
+
+        # Application des remplacements d'emojis
+        for key, val in replacements.items():
+            line = line.replace(key, val)
+
+        # Encodage sécurisé pour éviter les crashs (latin-1)
+        try:
+            safe_line = line.encode('latin-1', 'replace').decode('latin-1')
+        except:
+            continue  # Saute la ligne si illisible
+
+        if not safe_line:
+            pdf.ln(3)  # Petit espace pour les lignes vides
+            continue
+
+        # --- DÉTECTION DU STYLE MARKDOWN ---
+
+        # TITRE 1 (ex: # Lundi) -> Rouge + Gros
+        if safe_line.startswith('# '):
+            pdf.ln(5)
+            pdf.set_font("Arial", 'B', 16)
+            pdf.set_text_color(201, 43, 43)  # Rouge
+            content = safe_line.replace('#', '').strip()
+            pdf.cell(0, 10, content, 0, 1)
+
+            # Petite ligne sous le jour
+            x = pdf.get_x()
+            y = pdf.get_y()
+            pdf.set_draw_color(220, 220, 220)
+            pdf.line(x, y, x + 190, y)
+            pdf.ln(2)
+
+        # TITRE 2 (ex: ## Matin) -> Bleu Foncé
+        elif safe_line.startswith('## '):
+            pdf.ln(2)
+            pdf.set_font("Arial", 'B', 13)
+            pdf.set_text_color(44, 62, 80)  # Bleu nuit
+            content = safe_line.replace('#', '').strip()
+            pdf.cell(0, 8, content, 0, 1)
+
+        # LISTE A PUCES (ex: - 10min échauffement)
+        elif safe_line.startswith('- '):
+            pdf.set_font("Arial", '', 11)
+            pdf.set_text_color(50, 50, 50)  # Gris foncé
+            content = safe_line[2:]  # Enlève le tiret
+
+            # Astuce pour simuler une puce propre
+            current_y = pdf.get_y()
+            pdf.set_x(15)  # Indentation
+            pdf.cell(5, 5, chr(149), 0, 0)  # Puce ronde (bullet)
+            pdf.set_x(20)
+            pdf.multi_cell(0, 5, content.replace('**', ''))  # On enlève les ** du gras Markdown
+
+        # TEXTE NORMAL
+        else:
+            pdf.set_font("Arial", '', 11)
+            pdf.set_text_color(60, 60, 60)
+            pdf.multi_cell(0, 5, safe_line.replace('**', ''))
 
     return pdf.output(dest='S').encode('latin-1')
-
 
 def create_vector_store():
     """Charge et vectorise les documents."""
@@ -79,11 +153,9 @@ def create_vector_store():
             loader = PyPDFLoader(file_path)
             documents.extend(loader.load())
         except Exception as e:
-            st.error(f"Erreur chargement PDF {file_name}: {e}")
+            print(f"Erreur chargement PDF {file_name}: {e}")
 
     if not documents:
-        # Création d'un document vide factice pour ne pas planter si pas de PDF
-        # (Juste pour éviter le crash, mais le RAG sera vide)
         return None
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
@@ -112,16 +184,13 @@ llm_critique = ChatOpenAI(model="gpt-4o", temperature=0.5)
 
 
 def create_coach_agent_executor(retriever_tool, user_params):
-    """Agent Coach avec instructions impératives."""
+    """Agent Coach (Générateur V1)."""
     coach_prompt = ChatPromptTemplate.from_messages([
         SystemMessage(
             f"""
-            TU ES L'AGENT COACH IRONMAN. Ton rôle est de générer et d'adapter des plans d'entraînement.
-            RÈGLE 1 : NE JAMAIS POSER DE QUESTIONS. AGIS.
-            RÈGLE 2 : Utilise les paramètres fournis ou les retours utilisateurs pour construire le plan.
-            RÈGLE 3 : Structure ta réponse en Markdown clair.
-
-            Paramètres initiaux : {json.dumps(user_params)}
+            TU ES L'AGENT COACH (GÉNÉRATEUR). Ton rôle est de créer une première ébauche de plan.
+            Ne te soucie pas trop des détails physiologiques fins, concentre-toi sur la structure.
+            Paramètres : {json.dumps(user_params)}
             """
         ),
         HumanMessage(content="{user_input}"),
@@ -131,52 +200,292 @@ def create_coach_agent_executor(retriever_tool, user_params):
     return AgentExecutor(agent=agent, tools=[retriever_tool], verbose=True, handle_parsing_errors=True)
 
 
-def critique_plan(plan_brouillon, retriever_tool):
-    """Agent Physiologiste (Self-Correction)."""
-    max_retries = 3
-    rules = []
-    for attempt in range(max_retries):
-        try:
-            rules = retriever_tool.invoke("Règles progression, sécurité, volume max.")
-            if rules: break
-        except:
-            time.sleep(1)
+def finalize_plan_with_agent2(draft_plan, retriever_tool, user_params, feedbacks):
+    """Agent Physiologiste (Raffineur & Finaliseur)."""
 
-    rules_snippet = rules[0].page_content[:600] if rules else "Règles standards (10%, repos)."
+    # 1. Récupération contexte RAG
+    try:
+        rules = retriever_tool.invoke("Règles progression, sécurité, volume max.")
+        rules_snippet = rules[0].page_content[:800] if rules else "Règles standards."
+    except:
+        rules_snippet = "Règles standards triathlon."
 
-    critique_prompt = f"""
-    Critique ce plan Ironman en tant que physiologiste.
-    Règles RAG : {rules_snippet}...
-    Plan : {plan_brouillon}
+    # 2. Construction des contraintes unifiées (Params + Feedbacks)
+    feedback_str = "\n".join([f"- {fb}" for fb in feedbacks]) if feedbacks else "Aucun feedback supplémentaire."
 
-    Réponds UNIQUEMENT en JSON :
-    {{
-        "CRITIQUE_PRINCIPALE": "Violation majeure...",
-        "JUSTIFICATION_RAG": "Selon la règle...",
-        "CORRECTION_PROPOSEE": "Action concrète..."
-    }}
+    # Prompt de finalisation
+    refine_prompt = f"""
+    TU ES L'AGENT 2 : EXPERT PHYSIOLOGISTE ET COACH SENIOR.
+
+    Ton rôle est de générer le PLAN FINAL en perfectionnant l'ébauche fournie.
+
+    SOURCES D'INFORMATION (PAR ORDRE DE PRIORITÉ) :
+    1. PARAMÈTRES & FEEDBACKS UTILISATEUR (PRIORITÉ ABSOLUE) :
+       - Profil : {json.dumps(user_params)}
+       - Feedbacks Récents : 
+         {feedback_str}
+
+    2. RÈGLES PHYSIOLOGIQUES (RAG) :
+       {rules_snippet}
+
+    3. PLAN ACTUEL / ÉBAUCHE (BASE DE TRAVAIL) :
+       {draft_plan}
+
+    INSTRUCTIONS :
+    - Si le plan actuel respecte les feedbacks, garde sa structure.
+    - Si le plan actuel viole un feedback (ex: "Pas de natation le lundi" mais qu'il y en a), MODIFIE LE PLAN pour respecter le feedback.
+    - Améliore la précision physiologique.
+    - **FORMATTING IMPORTANT** : Utilise une structure Markdown très claire.
+      - Utilise des emojis pour chaque sport (🏊, 🚴, 🏃, 🏋️).
+      - Utilise des **Titres** pour les jours (ex: `### Lundi`).
+      - Mets les points clés en **Gras**.
+      - Fais une liste claire et aérée (tirets).
+
+    Génère directement le plan d'entraînement final (Format Markdown propre et esthétique).
+    IMPORTANT : Ne mets PAS de balises ```markdown au début ou à la fin. Donne juste le texte brut.
     """
-    response = llm_critique.invoke(critique_prompt, response_format={"type": "json_object"})
-    return response.content
+
+    # Appel direct au modèle (pas besoin d'agent complexe ici, c'est du raffinement textuel)
+    messages = [
+        SystemMessage(content="Tu es un expert en planification de triathlon. Tu finalises les plans."),
+        HumanMessage(content=refine_prompt)
+    ]
+    response = llm_critique.invoke(messages)
+
+    # --- CORRECTION 1 : NETTOYAGE DU TEXTE ---
+    # On retire les balises de code Markdown si l'IA en a mis
+    clean_content = response.content.replace("```markdown", "").replace("```", "").strip()
+
+    return clean_content
+
+
+def simple_markdown_to_html(text):
+    """Convertit un markdown simple en HTML pour l'affichage stylisé."""
+    if not text: return ""
+
+    # Conversion des Headers
+    text = re.sub(r'^# (.*?)$', r'<h1>\1</h1>', text, flags=re.MULTILINE)
+    text = re.sub(r'^## (.*?)$', r'<h2>\1</h2>', text, flags=re.MULTILINE)
+    text = re.sub(r'^### (.*?)$', r'<h3>\1</h3>', text, flags=re.MULTILINE)
+
+    # Conversion du Gras
+    text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
+
+    # Conversion des Listes (simplifiée pour le style carte)
+    lines = text.split('\n')
+    new_lines = []
+    in_list = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('- '):
+            if not in_list:
+                new_lines.append('<ul>')
+                in_list = True
+            content = stripped[2:]
+            new_lines.append(f'<li>{content}</li>')
+        else:
+            if in_list:
+                new_lines.append('</ul>')
+                in_list = False
+            # Conserver les lignes de texte normales
+            if not stripped.startswith('<h') and stripped:
+                new_lines.append(f'<p>{line}</p>')
+            else:
+                new_lines.append(line)
+
+    if in_list:
+        new_lines.append('</ul>')
+
+    return "\n".join(new_lines)
 
 
 # --- 3. INTERFACE STREAMLIT ---
 
-# load_dotenv() <- Supprimé d'ici car déplacé tout en haut
-st.set_page_config(page_title="IronMind AI", layout="wide")
+st.set_page_config(page_title="IronMind AI", layout="wide", page_icon="🏊‍♂️")
 
-# Initialisation du Session State pour garder la mémoire
+# --- CSS PERSONNALISÉ "GRANDIOSE" ---
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;800&display=swap');
+
+    /* TYPOGRAPHIE GLOBALE */
+    html, body, [class*="css"] {
+        font-family: 'Montserrat', sans-serif;
+    }
+
+    /* EN-TÊTE PRINCIPAL */
+    .main-header {
+        background: linear-gradient(90deg, #C92B2B 0%, #8E0E00 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-size: 3.5rem;
+        text-align: center;
+        font-weight: 800;
+        margin-bottom: 0.5rem;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .subtitle {
+        text-align: center;
+        color: #555;
+        font-size: 1.2rem;
+        margin-bottom: 2rem;
+        font-weight: 300;
+    }
+
+    .sub-header {
+        font-size: 1.8rem;
+        color: #2C3E50;
+        font-weight: 700;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+        border-left: 5px solid #C92B2B;
+        padding-left: 15px;
+    }
+
+    /* CARTE DU PLAN D'ENTRAÎNEMENT */
+    .plan-card {
+        background: #ffffff;
+        border-radius: 20px;
+        padding: 40px;
+        box-shadow: 0 15px 35px rgba(0,0,0,0.1); /* Ombre profonde */
+        border: 1px solid #f0f0f0;
+        position: relative;
+        overflow: hidden;
+        color: #333; /* Couleur par défaut du texte */
+    }
+
+    /* Bandeau décoratif sur la carte */
+    .plan-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 8px;
+        background: linear-gradient(90deg, #C92B2B, #FF4B4B);
+    }
+
+    /* STYLE HTML INTERNE DE LA CARTE */
+    .plan-card h1 {
+        color: #C92B2B;
+        font-size: 2rem;
+        font-weight: 800;
+        margin-top: 20px;
+        border-bottom: 2px solid #eee;
+        padding-bottom: 10px;
+    }
+
+    .plan-card h2 {
+        color: #2C3E50;
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin-top: 25px;
+        margin-bottom: 10px;
+    }
+
+    .plan-card h3 {
+        color: #C92B2B;
+        font-size: 1.2rem;
+        font-weight: 600;
+        margin-top: 20px;
+        text-transform: uppercase;
+    }
+
+    .plan-card strong {
+        color: #2C3E50;
+        background-color: #f8f9fa;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-weight: 700;
+        border: 1px solid #e9ecef;
+    }
+
+    .plan-card ul {
+        list-style: none;
+        padding-left: 0;
+    }
+
+    .plan-card li {
+        margin-bottom: 12px;
+        padding-left: 30px;
+        position: relative;
+        font-size: 1.05rem;
+        color: #444;
+        line-height: 1.6;
+    }
+
+    .plan-card li::before {
+        content: "➤";
+        color: #C92B2B;
+        position: absolute;
+        left: 0;
+        font-weight: bold;
+    }
+
+    .plan-card p {
+        font-size: 1rem;
+        color: #666;
+        line-height: 1.6;
+    }
+
+    /* BOUTONS STYLISÉS */
+    .stButton>button {
+        background: linear-gradient(45deg, #C92B2B, #FF416C);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-weight: 700;
+        font-size: 1.1rem;
+        height: 55px;
+        width: 100%;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(201, 43, 43, 0.3);
+    }
+
+    .stButton>button:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 20px rgba(201, 43, 43, 0.5);
+    }
+
+    /* SIDEBAR */
+    .css-1d391kg {
+        background-color: #f7f9fc;
+    }
+
+    /* ZONE DE TEXTE */
+    .stTextArea>div>div>textarea {
+        border-radius: 12px;
+        border: 2px solid #eee;
+        padding: 15px;
+        font-family: 'Montserrat', sans-serif;
+    }
+    .stTextArea>div>div>textarea:focus {
+        border-color: #C92B2B;
+        box-shadow: 0 0 0 2px rgba(201, 43, 43, 0.2);
+    }
+
+</style>
+""", unsafe_allow_html=True)
+
+# Initialisation du Session State
 if "current_plan" not in st.session_state:
     st.session_state.current_plan = None
 if "plan_history" not in st.session_state:
     st.session_state.plan_history = []
+if "feedbacks" not in st.session_state:
+    st.session_state.feedbacks = []
 if "rag_ready" not in st.session_state:
     st.session_state.rag_ready = False
 
-st.title("🧠 IronMind : Coach Triathlon Interactif")
-st.markdown("---")
+# En-tête Principal
+st.markdown('<div class="main-header">IRONMIND AI</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Le Coach Intelligent pour votre performance Triathlon</div>', unsafe_allow_html=True)
 
-# Chargement RAG unique
+# Chargement RAG
 if not st.session_state.rag_ready:
     try:
         retriever = get_retriever()
@@ -186,7 +495,6 @@ if not st.session_state.rag_ready:
         st.error(f"Erreur RAG: {e}")
         st.stop()
 
-# Outil RAG
 tool_rag = Tool(
     name="ExpertTriathlon",
     func=lambda q: st.session_state.retriever.invoke(q),
@@ -194,108 +502,117 @@ tool_rag = Tool(
 )
 
 # Sidebar
-st.sidebar.header("Paramètres Athlète")
-user_level = st.sidebar.selectbox("Niveau", ["Débutant", "Intermédiaire", "Avancé"])
-weekly_hours = st.sidebar.slider("Heures/semaine", 5, 25, 12)
-goal_race = st.sidebar.text_input("Objectif", "Ironman Nice")
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/2413/2413074.png", width=80)
+    st.header("Profil Athlète")
+    st.markdown("---")
+    user_level = st.selectbox("🏅 Niveau", ["Débutant", "Intermédiaire", "Avancé"])
+    weekly_hours = st.slider("⏱️ Volume (Heures/semaine)", 5, 25, 12)
+    goal_race = st.text_input("🎯 Objectif Principal", "Ironman Nice")
+
+    st.markdown("---")
+    st.info("💡 **Conseil :** Ajustez ces paramètres avant de générer votre premier plan.")
 
 user_params = {"Niveau": user_level, "Heures": weekly_hours, "Objectif": goal_race}
 
 # --- LOGIQUE PRINCIPALE ---
 
-# Bouton de génération initiale
-if st.sidebar.button("🚀 Générer le Plan Initial"):
-    st.session_state.plan_history = []  # Reset
+if st.sidebar.button("🚀 GÉNÉRER MON PLAN", type="primary"):
+    # Reset
+    st.session_state.plan_history = []
+    st.session_state.feedbacks = []
     st.session_state.current_plan = None
 
     coach = create_coach_agent_executor(tool_rag, user_params)
 
-    # Phase 1 : Brouillon
-    with st.spinner("Phase 1 : Génération initiale..."):
-        draft = coach.invoke({"user_input": "Génère la SEMAINE 1 détaillée."})["output"]
-        st.session_state.plan_history.append({"role": "Coach (V1)", "content": draft})
+    # --- AGENT 1 : BROUILLON ---
+    with st.spinner("🏃‍♂️ Agent 1 : Structuration du macrocycle..."):
+        prompt_initial = "Génère une ébauche de la SEMAINE 1."
+        draft = coach.invoke({"user_input": prompt_initial})["output"]
+        st.session_state.plan_history.append({"role": "Agent 1 (Brouillon)", "content": draft})
 
-    # Phase 2 : Critique
-    with st.spinner("Phase 2 : Analyse Physiologique..."):
-        critique_str = critique_plan(draft, tool_rag)
-        # Nettoyage JSON
-        if critique_str.strip().startswith('```'):
-            critique_str = critique_str.split('```json')[1].split('```')[0].strip()
-        critique = json.loads(critique_str)
-        st.session_state.plan_history.append({"role": "Physio", "content": critique})
-
-    # Phase 3 : Correction
-    with st.spinner("Phase 3 : Application des corrections..."):
-        correction = critique.get('CORRECTION_PROPOSEE', 'Aucune')
-        final_input = f"RÉVISION IMMÉDIATE. Applique STRICTEMENT cette correction : '{correction}'. Génère le plan final."
-        final_plan = coach.invoke({"user_input": final_input})["output"]
+    # --- AGENT 2 : FINALISATION ---
+    with st.spinner("🧬 Agent 2 : Optimisation physiologique & Design..."):
+        # Reçoit Params initiaux + Brouillon
+        final_plan = finalize_plan_with_agent2(draft, tool_rag, user_params, st.session_state.feedbacks)
 
         st.session_state.current_plan = final_plan
-        st.session_state.plan_history.append({"role": "Coach (Final)", "content": final_plan})
+        st.session_state.plan_history.append({"role": "Agent 2 (Final)", "content": final_plan})
 
-# --- AFFICHAGE DU RÉSULTAT & BOUCLE DE FEEDBACK ---
+# --- AFFICHAGE ET BOUCLE DE FEEDBACK ---
 
 if st.session_state.current_plan:
 
-    # Affichage de l'historique (Optionnel, pour montrer le raisonnement)
-    with st.expander("Voir le processus de raisonnement (V1 & Critique)"):
-        for step in st.session_state.plan_history[:-1]:
-            if step["role"] == "Physio":
-                st.error(f"🚨 Critique : {step['content']['CRITIQUE_PRINCIPALE']}")
-                st.success(f"💡 Correction : {step['content']['CORRECTION_PROPOSEE']}")
-            else:
-                st.text(f"--- {step['role']} ---")
-                # st.markdown(step["content"]) # Peut être long
+    # Affichage de l'historique dans un expander discret
+    with st.expander("🔬 Voir les logs du raisonnement IA"):
+        for step in st.session_state.plan_history:
+            st.code(f"Role: {step['role']}", language="text")
 
-    st.subheader("📅 Votre Plan d'Entraînement Actuel")
-    st.markdown(st.session_state.current_plan)
+    st.markdown('<div class="sub-header">📅 VOTRE SEMAINE TYPE</div>', unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.header("💬 Ajustements & Validation")
+    # CONVERSION MARKDOWN -> HTML pour affichage dans la carte
+    # Cela permet d'avoir le contenu DANS le div blanc avec le bon style
+    html_plan = simple_markdown_to_html(st.session_state.current_plan)
 
-    col1, col2 = st.columns([2, 1])
+    st.markdown(f"""
+    <div class="plan-card">
+        {html_plan}
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">💬 COACHING & AJUSTEMENTS</div>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns([2, 1], gap="large")
 
     with col1:
-        st.subheader("Demander des modifications")
-        user_feedback = st.text_area(
-            "Ce plan vous convient-il ? Sinon, demandez des changements (ex: 'Je ne peux pas nager le mardi', 'Moins de vélo').")
+        st.write("**Une contrainte ? Une blessure ? Dites-le au coach :**")
 
-        if st.button("🔄 Mettre à jour le plan"):
+        # --- CORRECTION 2 : UTILISATION D'UN FORMULAIRE (st.form) ---
+        # Cela permet de valider le feedback en UN SEUL CLIC
+        with st.form(key="feedback_form"):
+            user_feedback = st.text_area(
+                "feedback_input",
+                height=100,
+                label_visibility="collapsed",
+                placeholder="Ex: 'Pas de vélo le mercredi', 'Je veux plus de volume en natation'..."
+            )
+            submit_btn = st.form_submit_button("🔄 METTRE À JOUR LE PLAN")
+
+        if submit_btn:
             if user_feedback:
-                coach = create_coach_agent_executor(tool_rag, user_params)
-                with st.spinner("L'Agent Coach réadapte le plan selon vos retours..."):
-                    update_prompt = f"""
-                    ACTION : MISE À JOUR DU PLAN - MODIFICATION IMPÉRATIVE.
+                # 1. Mise à jour des feedbacks
+                st.session_state.feedbacks.append(user_feedback)
 
-                    PLAN À MODIFIER :
-                    {st.session_state.current_plan}
+                # 2. Récupération de l'ancien plan (celui affiché juste avant)
+                previous_plan = st.session_state.current_plan
 
-                    CONSIGNE DE L'UTILISATEUR (A RESPECTER ABSOLUMENT) : 
-                    "{user_feedback}"
+                # --- AGENT 2 SEUL : MISE À JOUR ---
+                with st.spinner("🤖 Agent 2 : Révision intelligente du plan..."):
 
-                    TÂCHE :
-                    Réécris entièrement le plan pour qu'il intègre cette nouvelle contrainte.
-                    IMPORTANT : Si l'utilisateur demande de changer un jour (ex: "pas de natation mardi"), tu DOIS déplacer cette séance ou réorganiser la semaine. Le plan final NE DOIT PAS contenir l'élément que l'utilisateur a rejeté.
+                    updated_plan = finalize_plan_with_agent2(
+                        previous_plan,  # On passe l'ancien plan comme "brouillon" à affiner
+                        tool_rag,
+                        user_params,
+                        st.session_state.feedbacks  # Les feedbacks sont concaténés ici
+                    )
 
-                    Format : Markdown complet.
-                    """
-                    new_plan = coach.invoke({"user_input": update_prompt})["output"]
-                    st.session_state.current_plan = new_plan
-                    st.session_state.plan_history.append({"role": "Mise à jour Utilisateur", "content": new_plan})
-                    st.rerun()  # Recharge la page pour afficher le nouveau plan
+                    st.session_state.current_plan = updated_plan
+                    st.session_state.plan_history.append(
+                        {"role": "Agent 2 (Mise à jour Feedback)", "content": updated_plan})
+
+                st.rerun()
             else:
-                st.warning("Veuillez entrer un feedback pour modifier le plan.")
+                st.warning("⚠️ Veuillez entrer un feedback avant de valider.")
 
     with col2:
-        st.subheader("Valider")
-        st.write("Si le plan est parfait, téléchargez-le en PDF.")
-
-        # Génération du PDF binaire
-        pdf_bytes = create_pdf(st.session_state.current_plan)
-
-        st.download_button(
-            label="✅ Valider et Télécharger (PDF)",
-            data=bytes(pdf_bytes),
-            file_name="Mon_Plan_IronMind.pdf",
-            mime="application/pdf"
-        )
+        st.write("**Satisfait ?**")
+        if st.session_state.current_plan:
+            pdf_bytes = create_pdf(st.session_state.current_plan)
+            st.download_button(
+                label="📥 TÉLÉCHARGER PDF",
+                data=bytes(pdf_bytes),
+                file_name="Plan_IronMind_Pro.pdf",
+                mime="application/pdf",
+                type="primary"
+            )
