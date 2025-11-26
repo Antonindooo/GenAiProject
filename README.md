@@ -2,7 +2,7 @@
 
 Projet IA Générative : Agents Intelligents, Raisonnement Avancé & Streamlit
 
-lien streamlit : https://genai-project-doat-morin-mouton-maeder.streamlit.app/
+lien streamlit : https://genai-ironmind.streamlit.app/
 
 ## 1. Objectif du Projet : Résoudre un Problème Complexe
 
