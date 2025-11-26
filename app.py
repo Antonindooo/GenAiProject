@@ -24,7 +24,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 CHROMA_DB_PATH = "chroma_data"
 KNOWLEDGE_BASE_DIR = "knowledge_base"
 
-# Liste des fichiers PDF (Assure-toi qu'ils sont bien dans le dossier knowledge_base)
+# Liste des fichiers PDF
 PDF_FILES = [
     "Ironman.pdf",
     "50-conseills-pour-reussir-vos-debuts-en-triathlon.pdf",
@@ -49,7 +49,6 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
             self.set_text_color(201, 43, 43)  # Rouge IronMind
             self.cell(0, 10, "IRONMIND - Plan d'Entrainement", 0, 1, 'C')
             self.ln(5)
-
             # Ligne de séparation
             self.set_draw_color(201, 43, 43)
             self.set_line_width(0.5)
@@ -76,7 +75,6 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
 
     for line in lines:
         line = line.strip()
-
         # Remplacement des emojis
         for key, val in replacements.items():
             line = line.replace(key, val)
@@ -88,44 +86,47 @@ def create_pdf(text, filename="Plan_Entrainement_IronMind.pdf"):
             continue
 
         if not safe_line:
-            pdf.ln(3)  # Petit espace pour les lignes vides
+            pdf.ln(3)
             continue
 
         # --- DÉTECTION DU STYLE MARKDOWN ---
-
-        # TITRE 1 (Jours) -> Rouge + Gros
+        # TITRE 1 (Jours)
         if safe_line.startswith('# '):
             pdf.ln(5)
             pdf.set_font("Arial", 'B', 16)
-            pdf.set_text_color(201, 43, 43)  # Rouge
+            pdf.set_text_color(201, 43, 43)
             content = safe_line.replace('#', '').strip()
             pdf.cell(0, 10, content, 0, 1)
-
-            # Petite ligne grise sous le jour
             x = pdf.get_x()
             y = pdf.get_y()
             pdf.set_draw_color(220, 220, 220)
             pdf.line(x, y, x + 190, y)
             pdf.ln(2)
 
-        # TITRE 2 (Sections matin/soir) -> Bleu Foncé
+        # TITRE 2 (Sections matin/soir)
         elif safe_line.startswith('## '):
             pdf.ln(2)
             pdf.set_font("Arial", 'B', 13)
-            pdf.set_text_color(44, 62, 80)  # Bleu nuit
+            pdf.set_text_color(44, 62, 80)
+            content = safe_line.replace('#', '').strip()
+            pdf.cell(0, 8, content, 0, 1)
+
+        # TITRE 4 (Sous-sections comme les jours si format ####)
+        elif safe_line.startswith('#### '):
+            pdf.ln(2)
+            pdf.set_font("Arial", 'B', 12)
+            pdf.set_text_color(201, 43, 43)
             content = safe_line.replace('#', '').strip()
             pdf.cell(0, 8, content, 0, 1)
 
         # LISTE A PUCES
         elif safe_line.startswith('- '):
             pdf.set_font("Arial", '', 11)
-            pdf.set_text_color(50, 50, 50)  # Gris foncé
-            content = safe_line[2:]  # Enlève le tiret
-
-            # Puce personnalisée
+            pdf.set_text_color(50, 50, 50)
+            content = safe_line[2:]
             pdf.set_x(15)
-            pdf.cell(5, 5, chr(149), 0, 0)  # Puce ronde
-            pdf.multi_cell(0, 5, content.replace('**', ''))  # Enlève le gras markdown
+            pdf.cell(5, 5, chr(149), 0, 0)
+            pdf.multi_cell(0, 5, content.replace('**', ''))
 
         # TEXTE NORMAL
         else:
@@ -188,6 +189,7 @@ def create_coach_agent_executor(retriever_tool, user_params):
             f"""
             TU ES L'AGENT COACH (GÉNÉRATEUR). Ton rôle est de créer une première ébauche de plan.
             Ne te soucie pas trop des détails physiologiques fins, concentre-toi sur la structure.
+            Le plan doit faire le même nombre de semaines que dans les parametresx.
             Paramètres : {json.dumps(user_params)}
             """
         ),
@@ -199,7 +201,10 @@ def create_coach_agent_executor(retriever_tool, user_params):
 
 
 def finalize_plan_with_agent2(draft_plan, retriever_tool, user_params, feedbacks):
-    """Agent Physiologiste (Raffineur & Finaliseur)."""
+    """
+    Agent Physiologiste (Raffineur & Finaliseur).
+    Retourne (Explication, Plan) nettoyés.
+    """
 
     # 1. Récupération contexte RAG
     try:
@@ -208,50 +213,66 @@ def finalize_plan_with_agent2(draft_plan, retriever_tool, user_params, feedbacks
     except:
         rules_snippet = "Règles standards triathlon."
 
-    # 2. Construction des contraintes unifiées (Params + Feedbacks)
-    feedback_str = "\n".join([f"- {fb}" for fb in feedbacks]) if feedbacks else "Aucun feedback supplémentaire."
+    # 2. Construction des contraintes unifiées
+    feedback_str = "\n".join(
+        [f"- {fb}" for fb in feedbacks]) if feedbacks else "Aucun feedback pour l'instant (Plan initial)."
 
     # Prompt de finalisation
     refine_prompt = f"""
     TU ES L'AGENT 2 : EXPERT PHYSIOLOGISTE ET COACH SENIOR.
 
-    Ton rôle est de générer le PLAN FINAL en perfectionnant l'ébauche fournie.
+    Ton rôle est de générer le PLAN FINAL et d'EXPLIQUER tes modifications si il y a des feedbacks.
 
-    SOURCES D'INFORMATION (PAR ORDRE DE PRIORITÉ) :
-    1. PARAMÈTRES & FEEDBACKS UTILISATEUR (PRIORITÉ ABSOLUE) :
-       - Profil : {json.dumps(user_params)}
-       - Feedbacks Récents : 
-         {feedback_str}
+    SOURCES :
+    1. PROFIL : {json.dumps(user_params)}
+    2. FEEDBACKS UTILISATEUR : 
+       {feedback_str}
+    3. RÈGLES RAG : {rules_snippet}
+    4. ÉBAUCHE : {draft_plan}
 
-    2. RÈGLES PHYSIOLOGIQUES (RAG) :
-       {rules_snippet}
+    INSTRUCTIONS DE STRUCTURE (TRES IMPORTANT) :
+    Tu dois répondre en DEUX PARTIES séparées par la balise exacte "---PLAN_START---".
 
-    3. PLAN ACTUEL / ÉBAUCHE (BASE DE TRAVAIL) :
-       {draft_plan}
+    PARTIE 1 : MESSAGE AU COACHÉ
+    - Si c'est la première génération : Dis un mot d'encouragement court.
+    - Si il y a des feedbacks : Explique brièvement (2-3 phrases) ce que tu as modifié pour respecter la demande.
 
-    INSTRUCTIONS :
-    - Si le plan actuel respecte les feedbacks, garde sa structure.
-    - Si le plan actuel viole un feedback (ex: "Pas de natation le lundi" mais qu'il y en a), MODIFIE LE PLAN pour respecter le feedback.
-    - Améliore la précision physiologique.
-    - **FORMATTING IMPORTANT** : Utilise une structure Markdown très claire.
-      - Utilise des emojis pour chaque sport (🏊, 🚴, 🏃, 🏋️).
-      - Utilise des **Titres** pour les jours (ex: `### Lundi`).
-      - Mets les points clés en **Gras**.
-      - Fais une liste claire et aérée (tirets).
-      - Ne mets PAS de balises ```markdown. Donne juste le texte brut.
+    ---PLAN_START---
 
-    Génère directement le plan d'entraînement final (Format Markdown propre et esthétique).
+    PARTIE 2 : LE PLAN (MARKDOWN)
+    - Utilise une structure Markdown très claire.
+    - Emojis : 🏊, 🚴, 🏃, 🏋️.
+    - Titres pour les jours : Utilise `#### Lundi`, `#### Mardi` (Niveau 4).
+    - Liste à puces claire.
+    - PAS de balises ```markdown ou ```. Juste le texte brut.
     """
 
     messages = [
-        SystemMessage(content="Tu es un expert en planification de triathlon. Tu finalises les plans."),
+        SystemMessage(content="Tu es un expert en planification. Tu expliques tes choix puis tu donnes le plan."),
         HumanMessage(content=refine_prompt)
     ]
-    response = llm_critique.invoke(messages)
 
-    # Nettoyage des balises Markdown parasites pour l'affichage
-    clean_content = response.content.replace("```markdown", "").replace("```", "").strip()
-    return clean_content
+    response = llm_critique.invoke(messages)
+    content = response.content
+
+    # Parsing de la réponse avec nettoyage robuste
+    if "---PLAN_START---" in content:
+        parts = content.split("---PLAN_START---")
+        explanation = parts[0].strip()
+        plan_clean = parts[1].strip()
+    else:
+        # Fallback
+        explanation = "Voici votre plan mis à jour."
+        plan_clean = content.strip()
+
+    # --- NETTOYAGE SUPPLÉMENTAIRE POUR EVITER LES ERREURS D'AFFICHAGE ---
+    # On enlève les titres parasites que l'IA a tendance à répéter
+    explanation = explanation.replace("PARTIE 1 : MESSAGE AU COACHÉ", "").replace("PARTIE 1", "").strip()
+
+    plan_clean = plan_clean.replace("PARTIE 2 : LE PLAN (MARKDOWN)", "").replace("PARTIE 2", "")
+    plan_clean = plan_clean.replace("```markdown", "").replace("```", "").strip()
+
+    return explanation, plan_clean
 
 
 def simple_markdown_to_html(text):
@@ -262,11 +283,13 @@ def simple_markdown_to_html(text):
     text = re.sub(r'^# (.*?)$', r'<h1>\1</h1>', text, flags=re.MULTILINE)
     text = re.sub(r'^## (.*?)$', r'<h2>\1</h2>', text, flags=re.MULTILINE)
     text = re.sub(r'^### (.*?)$', r'<h3>\1</h3>', text, flags=re.MULTILINE)
+    # NOUVEAU : Support des headers #### (souvent utilisés pour les jours)
+    text = re.sub(r'^#### (.*?)$', r'<h4>\1</h4>', text, flags=re.MULTILINE)
 
     # Conversion du Gras
     text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
 
-    # Conversion des Listes (simplifiée pour le style carte)
+    # Conversion des Listes
     lines = text.split('\n')
     new_lines = []
     in_list = False
@@ -283,7 +306,6 @@ def simple_markdown_to_html(text):
             if in_list:
                 new_lines.append('</ul>')
                 in_list = False
-            # Conserver les lignes de texte normales
             if not stripped.startswith('<h') and stripped:
                 new_lines.append(f'<p>{line}</p>')
             else:
@@ -299,165 +321,57 @@ def simple_markdown_to_html(text):
 
 st.set_page_config(page_title="IronMind AI", layout="wide", page_icon="🏊‍♂️")
 
-# --- CSS PERSONNALISÉ "GRANDIOSE" ---
+# --- CSS PERSONNALISÉ ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;800&display=swap');
+    html, body, [class*="css"] { font-family: 'Montserrat', sans-serif; }
 
-    /* TYPOGRAPHIE GLOBALE */
-    html, body, [class*="css"] {
-        font-family: 'Montserrat', sans-serif;
-    }
-
-    /* EN-TÊTE PRINCIPAL */
     .main-header {
         background: linear-gradient(90deg, #C92B2B 0%, #8E0E00 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        font-size: 3.5rem;
-        text-align: center;
-        font-weight: 800;
-        margin-bottom: 0.5rem;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        font-size: 3.5rem; text-align: center; font-weight: 800;
+        margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 2px;
     }
-
-    .subtitle {
-        text-align: center;
-        color: #555;
-        font-size: 1.2rem;
-        margin-bottom: 2rem;
-        font-weight: 300;
-    }
-
+    .subtitle { text-align: center; color: #555; font-size: 1.2rem; margin-bottom: 2rem; }
     .sub-header {
-        font-size: 1.8rem;
-        color: #2C3E50;
-        font-weight: 700;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
-        border-left: 5px solid #C92B2B;
-        padding-left: 15px;
+        font-size: 1.8rem; color: #2C3E50; font-weight: 700;
+        margin-top: 2rem; margin-bottom: 1rem;
+        border-left: 5px solid #C92B2B; padding-left: 15px;
     }
-
-    /* CARTE DU PLAN D'ENTRAÎNEMENT */
     .plan-card {
-        background: #ffffff;
-        border-radius: 20px;
-        padding: 40px;
-        box-shadow: 0 15px 35px rgba(0,0,0,0.1); /* Ombre profonde */
-        border: 1px solid #f0f0f0;
-        position: relative;
-        overflow: hidden;
-        color: #333; /* Couleur par défaut du texte */
+        background: #ffffff; border-radius: 20px; padding: 40px;
+        box-shadow: 0 15px 35px rgba(0,0,0,0.1); border: 1px solid #f0f0f0;
+        position: relative; overflow: hidden; color: #333;
     }
-
-    /* Bandeau décoratif sur la carte */
     .plan-card::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 8px;
+        content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 8px;
         background: linear-gradient(90deg, #C92B2B, #FF4B4B);
     }
+    .plan-card h1 { color: #C92B2B; font-size: 2rem; font-weight: 800; margin-top: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+    .plan-card h2 { color: #2C3E50; font-size: 1.5rem; font-weight: 700; margin-top: 25px; }
+    .plan-card h3 { color: #C92B2B; font-size: 1.2rem; font-weight: 600; margin-top: 20px; text-transform: uppercase; }
 
-    /* STYLE HTML INTERNE DE LA CARTE */
-    .plan-card h1 {
-        color: #C92B2B;
-        font-size: 2rem;
-        font-weight: 800;
-        margin-top: 20px;
-        border-bottom: 2px solid #eee;
-        padding-bottom: 10px;
+    /* NOUVEAU STYLE H4 pour les Jours (Lundi, Mardi...) */
+    .plan-card h4 { 
+        color: #2C3E50; font-size: 1.1rem; font-weight: 800; 
+        margin-top: 15px; margin-bottom: 10px; 
+        text-transform: uppercase; letter-spacing: 1px;
     }
 
-    .plan-card h2 {
-        color: #2C3E50;
-        font-size: 1.5rem;
-        font-weight: 700;
-        margin-top: 25px;
-        margin-bottom: 10px;
-    }
-
-    .plan-card h3 {
-        color: #C92B2B;
-        font-size: 1.2rem;
-        font-weight: 600;
-        margin-top: 20px;
-        text-transform: uppercase;
-    }
-
-    .plan-card strong {
-        color: #2C3E50;
-        background-color: #f8f9fa;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-weight: 700;
-        border: 1px solid #e9ecef;
-    }
-
-    .plan-card ul {
-        list-style: none;
-        padding-left: 0;
-    }
-
-    .plan-card li {
-        margin-bottom: 12px;
-        padding-left: 30px;
-        position: relative;
-        font-size: 1.05rem;
-        color: #444;
-        line-height: 1.6;
-    }
-
-    .plan-card li::before {
-        content: "➤";
-        color: #C92B2B;
-        position: absolute;
-        left: 0;
-        font-weight: bold;
-    }
-
-    .plan-card p {
-        font-size: 1rem;
-        color: #666;
-        line-height: 1.6;
-    }
-
-    /* BOUTONS STYLISÉS */
+    .plan-card strong { color: #2C3E50; background-color: #f8f9fa; padding: 2px 6px; border-radius: 4px; font-weight: 700; border: 1px solid #e9ecef; }
+    .plan-card ul { list-style: none; padding-left: 0; }
+    .plan-card li { margin-bottom: 12px; padding-left: 30px; position: relative; font-size: 1.05rem; color: #444; }
+    .plan-card li::before { content: "➤"; color: #C92B2B; position: absolute; left: 0; font-weight: bold; }
     .stButton>button {
-        background: linear-gradient(45deg, #C92B2B, #FF416C);
-        color: white;
-        border: none;
-        border-radius: 12px;
-        font-weight: 700;
-        font-size: 1.1rem;
-        height: 55px;
-        width: 100%;
-        transition: all 0.3s ease;
+        background: linear-gradient(45deg, #C92B2B, #FF416C); color: white;
+        border: none; border-radius: 12px; font-weight: 700; font-size: 1.1rem;
+        height: 55px; width: 100%; transition: all 0.3s ease;
         box-shadow: 0 4px 15px rgba(201, 43, 43, 0.3);
     }
-
-    .stButton>button:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 20px rgba(201, 43, 43, 0.5);
-    }
-
-    /* ZONE DE TEXTE */
-    .stTextArea>div>div>textarea {
-        border-radius: 12px;
-        border: 2px solid #eee;
-        padding: 15px;
-        font-family: 'Montserrat', sans-serif;
-    }
-    .stTextArea>div>div>textarea:focus {
-        border-color: #C92B2B;
-        box-shadow: 0 0 0 2px rgba(201, 43, 43, 0.2);
-    }
-
+    .stButton>button:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(201, 43, 43, 0.5); }
+    .stTextArea>div>div>textarea { border-radius: 12px; border: 2px solid #eee; padding: 15px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -468,6 +382,8 @@ if "plan_history" not in st.session_state:
     st.session_state.plan_history = []
 if "feedbacks" not in st.session_state:
     st.session_state.feedbacks = []
+if "coach_message" not in st.session_state:
+    st.session_state.coach_message = ""
 if "rag_ready" not in st.session_state:
     st.session_state.rag_ready = False
 
@@ -493,22 +409,15 @@ tool_rag = Tool(
 
 # Sidebar
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2413/2413074.png", width=80)
     st.header("Profil Athlète")
     st.markdown("---")
-
-    # Paramètres de base
     user_level = st.selectbox("🏅 Niveau", ["Débutant", "Intermédiaire", "Avancé"])
     weekly_hours = st.slider("⏱️ Volume (Heures/semaine)", 5, 25, 12)
     goal_race = st.text_input("🎯 Objectif Principal", "Ironman Nice")
-
-    # NOUVEAU PARAMETRE : TEMPS
     weeks_until_race = st.number_input("⏳ Semaines avant la course", min_value=1, max_value=52, value=12)
-
     st.markdown("---")
     st.info("💡 **Conseil :** Ajustez ces paramètres avant de générer votre premier plan.")
 
-# Intégration du temps restant dans les paramètres envoyés à l'IA
 user_params = {
     "Niveau": user_level,
     "Heures": weekly_hours,
@@ -523,6 +432,7 @@ if st.sidebar.button("🚀 GÉNÉRER MON PLAN", type="primary"):
     st.session_state.plan_history = []
     st.session_state.feedbacks = []
     st.session_state.current_plan = None
+    st.session_state.coach_message = ""
 
     coach = create_coach_agent_executor(tool_rag, user_params)
 
@@ -534,9 +444,10 @@ if st.sidebar.button("🚀 GÉNÉRER MON PLAN", type="primary"):
 
     # --- AGENT 2 : FINALISATION ---
     with st.spinner("🧬 Agent 2 : Optimisation physiologique & Design..."):
-        # Reçoit Params initiaux + Brouillon
-        final_plan = finalize_plan_with_agent2(draft, tool_rag, user_params, st.session_state.feedbacks)
+        # Double unpacking
+        explanation, final_plan = finalize_plan_with_agent2(draft, tool_rag, user_params, st.session_state.feedbacks)
 
+        st.session_state.coach_message = explanation
         st.session_state.current_plan = final_plan
         st.session_state.plan_history.append({"role": "Agent 2 (Final)", "content": final_plan})
 
@@ -544,14 +455,17 @@ if st.sidebar.button("🚀 GÉNÉRER MON PLAN", type="primary"):
 
 if st.session_state.current_plan:
 
-    # Affichage de l'historique dans un expander discret
     with st.expander("🔬 Voir les logs du raisonnement IA"):
         for step in st.session_state.plan_history:
             st.code(f"Role: {step['role']}", language="text")
 
     st.markdown('<div class="sub-header">📅 VOTRE SEMAINE TYPE</div>', unsafe_allow_html=True)
 
-    # CONVERSION MARKDOWN -> HTML pour affichage dans la carte
+    # --- AFFICHAGE DU MESSAGE DU COACH ---
+    if st.session_state.coach_message:
+        st.info(f"🗣️ **Coach IronMind :** {st.session_state.coach_message}")
+    # -------------------------------------
+
     html_plan = simple_markdown_to_html(st.session_state.current_plan)
 
     st.markdown(f"""
@@ -568,7 +482,6 @@ if st.session_state.current_plan:
     with col1:
         st.write("**Une contrainte ? Une blessure ? Dites-le au coach :**")
 
-        # --- UTILISATION D'UN FORMULAIRE (POUR VALIDATION EN 1 CLIC) ---
         with st.form(key="feedback_form"):
             user_feedback = st.text_area(
                 "input_feedback",
@@ -580,22 +493,19 @@ if st.session_state.current_plan:
 
         if submit_btn:
             if user_feedback:
-                # 1. Mise à jour des feedbacks
                 st.session_state.feedbacks.append(user_feedback)
-
-                # 2. Récupération de l'ancien plan (celui affiché juste avant)
                 previous_plan = st.session_state.current_plan
 
-                # --- AGENT 2 SEUL : MISE À JOUR ---
                 with st.spinner("🤖 Agent 2 : Révision intelligente du plan..."):
 
-                    updated_plan = finalize_plan_with_agent2(
-                        previous_plan,  # On passe l'ancien plan comme "brouillon" à affiner
+                    explanation, updated_plan = finalize_plan_with_agent2(
+                        previous_plan,
                         tool_rag,
                         user_params,
-                        st.session_state.feedbacks  # Les feedbacks sont concaténés ici
+                        st.session_state.feedbacks
                     )
 
+                    st.session_state.coach_message = explanation
                     st.session_state.current_plan = updated_plan
                     st.session_state.plan_history.append(
                         {"role": "Agent 2 (Mise à jour Feedback)", "content": updated_plan})
@@ -607,7 +517,6 @@ if st.session_state.current_plan:
     with col2:
         st.write("**Satisfait ?**")
         if st.session_state.current_plan:
-            # Génération du PDF avec la NOUVELLE fonction stylisée
             pdf_bytes = create_pdf(st.session_state.current_plan)
             st.download_button(
                 label="📥 TÉLÉCHARGER PDF",
