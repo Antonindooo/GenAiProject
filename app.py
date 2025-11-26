@@ -482,7 +482,7 @@ if st.session_state.current_plan:
     with col1:
         st.write("**Une contrainte ? Une blessure ? Dites-le au coach :**")
 
-        with st.form(key="feedback_form"):
+        with st.form(key="feedback_form", clear_on_submit=True):
             user_feedback = st.text_area(
                 "input_feedback",
                 height=100,
